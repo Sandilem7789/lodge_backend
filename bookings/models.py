@@ -8,6 +8,11 @@ class Booking(models.Model):
         ('event', 'Event'),
         ('safari', 'Safari Drive'),
     ]
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('confirmed', 'Confirmed'),
+        ('cancelled', 'Cancelled'),
+    ]
     type = models.CharField(max_length=20, choices=BOOKING_TYPES)
     name = models.CharField(max_length=100)
     email = models.EmailField()
@@ -16,6 +21,10 @@ class Booking(models.Model):
     check_out = models.DateField(null=True, blank=True)
     guests = models.PositiveIntegerField(default=1)
     message = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='confirmed')
     confirmation_number = models.CharField(max_length=50, unique=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.name} ({self.confirmation_number})"

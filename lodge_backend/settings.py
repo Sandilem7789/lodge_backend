@@ -26,6 +26,7 @@ SECRET_KEY = 'django-insecure-dr)y9^&)*j-w38(#c5j_of$&6u0o!v^#q*ys-%c9htt^4642@(
 DEBUG = True
 
 ALLOWED_HOSTS = []
+CORS_ALLOW_ALL_ORIGINS = True
 
 
 # Application definition
@@ -40,7 +41,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'bookings',
     'contact',
-    'newsletter',
+    'newsletter','corsheaders',
 ]
 
 MIDDLEWARE = [
@@ -51,6 +52,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
 ]
 
 ROOT_URLCONF = 'lodge_backend.urls'

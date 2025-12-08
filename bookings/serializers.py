@@ -22,6 +22,7 @@ class BookingSerializer(serializers.ModelSerializer):
             'check_out',
             'guests',
             'message',
+            'status',
             'confirmation_number',
             'created_at',
         ]

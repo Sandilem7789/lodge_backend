@@ -1,6 +1,6 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
+from rest_framework import status, generics
 from django.db.models import Q
 from .models import Booking
 from .serializers import BookingSerializer, AvailabilitySerializer
@@ -111,6 +111,100 @@ class BookingDetailView(APIView):
         return Response(
             {
                 'message': 'Booking retrieved successfully.',
+                'data': serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+    
+    def delete(self, request, confirmation_number):
+        try:
+            booking = Booking.objects.get(confirmation_number=confirmation_number)
+        except Booking.DoesNotExist:
+            return Response(
+                {'message': 'Booking not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        booking.delete()
+        return Response(
+            {'message': 'Booking deleted successfully.'},
+            status=status.HTTP_200_OK,
+        )
+
+
+class BookingListView(generics.ListAPIView):
+    """
+    List all bookings.
+    Endpoint: GET /api/bookings/
+    """
+    queryset = Booking.objects.all()
+    serializer_class = BookingSerializer
+
+
+class BookingListCreateView(APIView):
+    """
+    Handle both GET and POST requests on root endpoint.
+    GET: List all bookings
+    POST: Create a new booking
+    Endpoint: GET/POST /api/bookings/
+    """
+
+    def get(self, request):
+        """List all bookings."""
+        bookings = Booking.objects.all()
+        serializer = BookingSerializer(bookings, many=True)
+        return Response(
+            {
+                'message': 'Bookings retrieved successfully.',
+                'count': bookings.count(),
+                'data': serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def post(self, request):
+        """Create a new booking."""
+        serializer = BookingSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(
+                {
+                    'message': 'Booking created successfully.',
+                    'data': serializer.data,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+        return Response(
+            {
+                'message': 'Failed to create booking.',
+                'errors': serializer.errors,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+class BookingCancelView(APIView):
+    """
+    Cancel a booking by marking its status as 'cancelled'.
+    Endpoint: PATCH /api/bookings/<confirmation_number>/cancel/
+    """
+
+    def patch(self, request, confirmation_number):
+        try:
+            booking = Booking.objects.get(confirmation_number=confirmation_number)
+        except Booking.DoesNotExist:
+            return Response(
+                {'message': 'Booking not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        booking.status = 'cancelled'
+        booking.save()
+
+        serializer = BookingSerializer(booking)
+        return Response(
+            {
+                'message': 'Booking cancelled successfully.',
                 'data': serializer.data,
             },
             status=status.HTTP_200_OK,
