@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import ContactMessage
+from .models import BookingRequest
 
 
 class ContactSerializer(serializers.ModelSerializer):
@@ -35,3 +36,17 @@ class ContactSerializer(serializers.ModelSerializer):
         if not value or not value.strip():
             raise serializers.ValidationError("Message is required.")
         return value.strip()
+
+
+class BookingRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BookingRequest
+        fields = [
+            'id', 'name', 'email', 'phone', 'type', 'check_in', 'check_out', 'guests', 'message', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+    def validate_email(self, value):
+        if not value:
+            raise serializers.ValidationError('Email is required')
+        return value

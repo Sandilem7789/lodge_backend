@@ -16,9 +16,14 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from bookings.views import StaffDashboardView, AvailabilityCalendarView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+        # Secret staff dashboard (not /admin) - restrict access to staff users
+        path('staff-area-9f3b7d3a-portal/', StaffDashboardView.as_view(), name='staff-dashboard'),
+        # Global availability calendar for frontend to disable fully-booked dates
+        path('api/availability/', AvailabilityCalendarView.as_view(), name='availability-calendar'),
     path('api/bookings/', include('bookings.urls')),
     path('api/contact/', include('contact.urls')),
     path('api/newsletter/', include('newsletter.urls')),

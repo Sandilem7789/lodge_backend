@@ -23,10 +23,12 @@ class BookingSerializer(serializers.ModelSerializer):
             'guests',
             'message',
             'status',
+            'cancelled_at',
+            'cancellation_reason',
             'confirmation_number',
             'created_at',
         ]
-        read_only_fields = ['id', 'confirmation_number', 'created_at']
+        read_only_fields = ['id', 'confirmation_number', 'created_at', 'cancelled_at']
 
     def validate_email(self, value):
         """Validate email format."""
@@ -68,6 +70,44 @@ class BookingSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "Number of guests must be at least 1."
             )
+
+        # Capacity rules per booking type (units = number of separate bookable units)
+        # and per-booking guest limits. Adjust units if facility counts change.
+        capacity = {
+            'chalet': {'units': 3, 'min': 1, 'max': 4},
+            'campsite': {'units': 10, 'min': 1, 'max': 7},
+            'conference': {'units': 1, 'min': 1, 'max': 11},
+            'safari': {'units': 5, 'min': 7, 'max': 10},
+            'event': {'units': 9999, 'min': 1, 'max': 9999},
+        }
+
+        booking_type = data.get('type')
+        # Enforce per-booking guest constraints
+        if booking_type in capacity and guests is not None:
+            cfg = capacity[booking_type]
+            if guests < cfg['min'] or guests > cfg['max']:
+                raise serializers.ValidationError(
+                    f"'{booking_type}' bookings must have between {cfg['min']} and {cfg['max']} guests."
+                )
+
+        # Enforce per-date unit availability if dates provided
+        if booking_type and check_in and check_out:
+            cfg = capacity.get(booking_type)
+            if cfg:
+                units = cfg['units']
+                # iterate nights from check_in to day before check_out
+                day = check_in
+                while day < check_out:
+                    overlapping = Booking.objects.filter(
+                        type=booking_type,
+                        check_in__lte=day,
+                        check_out__gt=day,
+                    ).count()
+                    if overlapping >= units:
+                        raise serializers.ValidationError(
+                            {"non_field_errors": [f"No availability for {booking_type} on {day}. Fully booked."]}
+                        )
+                    day = day + timedelta(days=1)
 
         return data
 

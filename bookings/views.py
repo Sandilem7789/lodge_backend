@@ -2,8 +2,14 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, generics
 from django.db.models import Q
+from django.utils import timezone
+from django.views.generic import TemplateView
+from django.contrib.auth.decorators import login_required, user_passes_test
+from django.utils.decorators import method_decorator
+
 from .models import Booking
 from .serializers import BookingSerializer, AvailabilitySerializer
+from datetime import timedelta, date
 
 
 class BookingCreateView(APIView):
@@ -150,8 +156,44 @@ class BookingListCreateView(APIView):
     """
 
     def get(self, request):
-        """List all bookings."""
+        """List all bookings with optional filters and search.
+
+        Supported query params:
+        - start_date (YYYY-MM-DD)
+        - end_date (YYYY-MM-DD)
+        - status
+        - name (partial match on guest name)
+        - search (searches name, email, confirmation_number)
+        """
         bookings = Booking.objects.all()
+
+        # Date range filtering
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        if start_date:
+            bookings = bookings.filter(check_in__gte=start_date)
+        if end_date:
+            bookings = bookings.filter(check_out__lte=end_date)
+
+        # Status filter
+        status_q = request.query_params.get('status')
+        if status_q:
+            bookings = bookings.filter(status__iexact=status_q)
+
+        # Guest name filter
+        name = request.query_params.get('name')
+        if name:
+            bookings = bookings.filter(name__icontains=name)
+
+        # Search across name, email, confirmation_number
+        search = request.query_params.get('search')
+        if search:
+            bookings = bookings.filter(
+                Q(name__icontains=search)
+                | Q(email__icontains=search)
+                | Q(confirmation_number__icontains=search)
+            )
+
         serializer = BookingSerializer(bookings, many=True)
         return Response(
             {
@@ -198,7 +240,11 @@ class BookingCancelView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Accept optional cancellation_reason in PATCH body
+        reason = request.data.get('cancellation_reason')
         booking.status = 'cancelled'
+        booking.cancellation_reason = reason or booking.cancellation_reason
+        booking.cancelled_at = timezone.now()
         booking.save()
 
         serializer = BookingSerializer(booking)
@@ -209,3 +255,123 @@ class BookingCancelView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class GroupedBookingsView(APIView):
+    """
+    Return grouped booking counts by type and optional lists.
+    Endpoint: GET /api/bookings/grouped/?type=chalet&start_date=&end_date=&status=&search=
+    """
+
+    def get(self, request):
+        bookings = Booking.objects.all()
+
+        # Apply same filters as listing
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        if start_date:
+            bookings = bookings.filter(check_in__gte=start_date)
+        if end_date:
+            bookings = bookings.filter(check_out__lte=end_date)
+
+        status_q = request.query_params.get('status')
+        if status_q:
+            bookings = bookings.filter(status__iexact=status_q)
+
+        search = request.query_params.get('search')
+        if search:
+            bookings = bookings.filter(
+                Q(name__icontains=search) | Q(email__icontains=search) | Q(confirmation_number__icontains=search)
+            )
+
+        # If a specific type is requested, return list for that type
+        req_type = request.query_params.get('type')
+        result = {}
+        types = [t[0] for t in Booking.BOOKING_TYPES]
+
+        if req_type:
+            filtered = bookings.filter(type=req_type)
+            serializer = BookingSerializer(filtered, many=True)
+            result = {
+                'type': req_type,
+                'count': filtered.count(),
+                'data': serializer.data,
+            }
+            return Response(result, status=status.HTTP_200_OK)
+
+        # Otherwise return counts per type
+        for t in types:
+            result[t] = bookings.filter(type=t).count()
+
+        result['total'] = bookings.count()
+        return Response(result, status=status.HTTP_200_OK)
+
+
+class AvailabilityCalendarView(APIView):
+    """
+    Return fully booked dates per booking category.
+    Endpoint: GET /api/availability/?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
+    If no dates provided, defaults to next 30 days.
+    """
+
+    def get(self, request):
+        # Date window
+        start = request.query_params.get('start_date')
+        end = request.query_params.get('end_date')
+        today = timezone.now().date()
+        if start:
+            start_date = date.fromisoformat(start)
+        else:
+            start_date = today
+        if end:
+            end_date = date.fromisoformat(end)
+        else:
+            end_date = start_date + timedelta(days=30)
+
+        # capacity definition must match serializer
+        capacity = {
+            'chalet': {'units': 3},
+            'campsite': {'units': 10},
+            'conference': {'units': 1},
+            'safari': {'units': 5},
+            'event': {'units': 9999},
+        }
+
+        result = {t[0]: [] for t in Booking.BOOKING_TYPES}
+
+        day = start_date
+        while day <= end_date:
+            for tkey, _ in Booking.BOOKING_TYPES:
+                cfg = capacity.get(tkey, {'units': 9999})
+                units = cfg['units']
+                count = Booking.objects.filter(check_in__lte=day, check_out__gt=day, type=tkey).count()
+                if count >= units:
+                    result[tkey].append(day.isoformat())
+            day = day + timedelta(days=1)
+
+        return Response(result, status=status.HTTP_200_OK)
+
+
+@method_decorator(login_required, name='dispatch')
+@method_decorator(user_passes_test(lambda u: u.is_staff), name='dispatch')
+class StaffDashboardView(TemplateView):
+    """
+    Simple staff-only dashboard. Place behind a non-obvious URL in project urls.
+    Template: bookings/staff_dashboard.html
+    """
+    template_name = 'bookings/staff_dashboard.html'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        # Show recent bookings and counts for quick overview
+        ctx['recent_bookings'] = Booking.objects.order_by('-created_at')[:25]
+        ctx['counts_by_type'] = {t[0]: Booking.objects.filter(type=t[0]).count() for t in Booking.BOOKING_TYPES}
+        ctx['cancelled_count'] = Booking.objects.filter(status='cancelled').count()
+        # Include recent booking requests from contact app, if present
+        try:
+            from contact.models import BookingRequest
+
+            ctx['recent_booking_requests'] = BookingRequest.objects.order_by('-created_at')[:25]
+        except Exception:
+            ctx['recent_booking_requests'] = []
+        return ctx

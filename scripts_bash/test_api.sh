@@ -1,53 +1,105 @@
 #!/bin/bash
-echo "🔄 Resetting and testing Ikhaya Lami Lodge API endpoints..."
+# Test Booking API Endpoints - Complete Test Suite
+# This script tests all booking endpoints and verifies confirmation_number is returned
 
-BASE_URL="http://127.0.0.1:8000/api"
+BASE_URL="http://127.0.0.1:8000/api/bookings"
+CONTENT_TYPE="Content-Type: application/json"
 
-# 0. List all current bookings
-echo "➡️ Listing current bookings..."
-curl -s $BASE_URL/bookings/ | jq
-echo -e "\n"
+echo "================================================"
+echo "Testing Ikhaya Lami Lodge Booking API"
+echo "================================================"
+echo ""
 
-# 1. Delete all bookings (loop through confirmation numbers)
-echo "➡️ Deleting all bookings..."
-for CONF in $(curl -s $BASE_URL/bookings/ | jq -r '.[]?.confirmation_number'); do
-  echo "Deleting booking $CONF..."
-  curl -X DELETE $BASE_URL/bookings/$CONF/
-done
-echo -e "\n"
-
-# 2. Add fresh bookings
-echo "➡️ Creating new bookings..."
-curl -X POST $BASE_URL/bookings/ \
-  -H "Content-Type: application/json" \
+# 1. Create a Booking (POST) - Verify confirmation_number is returned
+echo "1️⃣  CREATE BOOKING (POST /api/bookings/)"
+echo "---"
+BOOKING_RESPONSE=$(curl -s -X POST "$BASE_URL/" \
+  -H "$CONTENT_TYPE" \
   -d '{
-    "type":"chalet",
-    "name":"Alice",
-    "email":"alice@example.com",
-    "phone":"111111111",
-    "check_in":"2025-12-15",
-    "check_out":"2025-12-18",
-    "guests":2,
-    "message":"First test booking"
-  }'
-echo -e "\n"
+    "type": "chalet",
+    "name": "Jane Smith",
+    "email": "jane@example.com",
+    "phone": "+27712345678",
+    "check_in": "2025-12-15",
+    "check_out": "2025-12-18",
+    "guests": 3,
+    "message": "Beach vacation with family!"
+  }')
 
-curl -X POST $BASE_URL/bookings/ \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type":"campsite",
-    "name":"Bob",
-    "email":"bob@example.com",
-    "phone":"222222222",
-    "check_in":"2025-12-20",
-    "check_out":"2025-12-22",
-    "guests":4,
-    "message":"Second test booking"
-  }'
-echo -e "\n"
+echo "$BOOKING_RESPONSE" | jq .
+echo ""
 
-# 3. Test availability
-echo "➡️ Checking availability..."
+# Extract confirmation_number from response
+CONFIRMATION=$(echo "$BOOKING_RESPONSE" | jq -r '.data.confirmation_number // "N/A"')
+echo "📝 Confirmation Number: $CONFIRMATION"
+echo ""
+echo "================================================"
+echo ""
+
+# 2. List All Bookings (GET)
+echo "2️⃣  LIST ALL BOOKINGS (GET /api/bookings/)"
+echo "---"
+curl -s -X GET "$BASE_URL/" \
+  -H "$CONTENT_TYPE" | jq .
+echo ""
+echo "================================================"
+echo ""
+
+# 3. Get Booking Details (GET by confirmation_number)
+if [ "$CONFIRMATION" != "N/A" ]; then
+  echo "3️⃣  GET BOOKING DETAILS (GET /api/bookings/$CONFIRMATION/)"
+  echo "---"
+  curl -s -X GET "$BASE_URL/$CONFIRMATION/" \
+    -H "$CONTENT_TYPE" | jq .
+  echo ""
+  echo "================================================"
+  echo ""
+
+  # 4. Cancel Booking (PATCH)
+  echo "4️⃣  CANCEL BOOKING (PATCH /api/bookings/$CONFIRMATION/cancel/)"
+  echo "---"
+  CANCEL_RESPONSE=$(curl -s -X PATCH "$BASE_URL/$CONFIRMATION/cancel/" \
+    -H "$CONTENT_TYPE")
+  echo "$CANCEL_RESPONSE" | jq .
+  echo ""
+  echo "================================================"
+  echo ""
+
+  # 5. Get Cancelled Booking (should still exist with status='cancelled')
+  echo "5️⃣  GET CANCELLED BOOKING (status should be 'cancelled')"
+  echo "---"
+  curl -s -X GET "$BASE_URL/$CONFIRMATION/" \
+    -H "$CONTENT_TYPE" | jq '.data | {confirmation_number, status, name, email}'
+  echo ""
+  echo "================================================"
+  echo ""
+
+  # 6. Delete Booking (DELETE)
+  echo "6️⃣  DELETE BOOKING (DELETE /api/bookings/$CONFIRMATION/)"
+  echo "---"
+  curl -s -X DELETE "$BASE_URL/$CONFIRMATION/" \
+    -H "$CONTENT_TYPE" | jq .
+  echo ""
+  echo "================================================"
+  echo ""
+
+  # 7. Try to Get Deleted Booking (should return 404)
+  echo "7️⃣  GET DELETED BOOKING (should return 404 Not Found)"
+  echo "---"
+  curl -s -X GET "$BASE_URL/$CONFIRMATION/" \
+    -H "$CONTENT_TYPE" | jq .
+  echo ""
+else
+  echo "❌ Failed to extract confirmation_number from booking creation response"
+fi
+
+echo "================================================"
+echo "8️⃣  CHECK AVAILABILITY (GET /api/bookings/availability/)"
+echo "---"
+curl -s -X GET "$BASE_URL/availability/?type=chalet&check_in=2025-12-20&check_out=2025-12-25" \
+  -H "$CONTENT_TYPE" | jq .
+echo ""
+echo "================================================"
 curl "$BASE_URL/bookings/availability/?type=chalet&check_in=2025-12-15&check_out=2025-12-18"
 echo -e "\n"
 

@@ -25,7 +25,7 @@ SECRET_KEY = 'django-insecure-dr)y9^&)*j-w38(#c5j_of$&6u0o!v^#q*ys-%c9htt^4642@(
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'testserver']
 CORS_ALLOW_ALL_ORIGINS = True
 
 
@@ -126,3 +126,13 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Security: enable these in production when HTTPS/SSL is configured
+# Ensure you have a valid SSL certificate and run behind HTTPS
+if not DEBUG:
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True

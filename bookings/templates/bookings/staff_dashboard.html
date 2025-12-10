@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Staff Dashboard</h1>
+<p>Welcome, {{ user.get_full_name|default:user.username }} — staff overview.</p>
+
+<h2>Counts by type</h2>
+<ul>
+  {% for t, count in counts_by_type.items %}
+    <li>{{ t }}: {{ count }}</li>
+  {% endfor %}
+</ul>
+
+<p>Cancelled bookings: {{ cancelled_count }}</p>
+
+<h2>Recent bookings</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Confirmation</th>
+      <th>Name</th>
+      <th>Type</th>
+      <th>Check-in</th>
+      <th>Check-out</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for b in recent_bookings %}
+    <tr>
+      <td>{{ b.confirmation_number }}</td>
+      <td>{{ b.name }}</td>
+      <td>{{ b.type }}</td>
+      <td>{{ b.check_in }}</td>
+      <td>{{ b.check_out }}</td>
+      <td>{{ b.status }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% endblock %}

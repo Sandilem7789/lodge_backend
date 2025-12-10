@@ -22,6 +22,8 @@ class Booking(models.Model):
     guests = models.PositiveIntegerField(default=1)
     message = models.TextField(blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='confirmed')
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancellation_reason = models.TextField(null=True, blank=True)
     confirmation_number = models.CharField(max_length=50, unique=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
