@@ -13,6 +13,11 @@ class Booking(models.Model):
         ('confirmed', 'Confirmed'),
         ('cancelled', 'Cancelled'),
     ]
+    SAFARI_SLOTS = [
+        ('morning', 'Morning (07:30-09:30)'),
+        ('midday', 'Midday (11:00-13:00)'),
+        ('afternoon', 'Afternoon (15:30-17:30)'),
+    ]
     type = models.CharField(max_length=20, choices=BOOKING_TYPES)
     name = models.CharField(max_length=100)
     email = models.EmailField()
@@ -21,10 +26,13 @@ class Booking(models.Model):
     check_out = models.DateField(null=True, blank=True)
     guests = models.PositiveIntegerField(default=1)
     message = models.TextField(blank=True)
+    # Safari-specific slot (only used when type == 'safari')
+    safari_slot = models.CharField(max_length=20, choices=SAFARI_SLOTS, null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='confirmed')
     cancelled_at = models.DateTimeField(null=True, blank=True)
     cancellation_reason = models.TextField(null=True, blank=True)
     confirmation_number = models.CharField(max_length=50, unique=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Total booking amount in ZAR")
 
     created_at = models.DateTimeField(auto_now_add=True)
 

@@ -16,15 +16,27 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
-from bookings.views import StaffDashboardView, AvailabilityCalendarView
+from bookings.views import StaffDashboardView, AvailabilityCalendarView, SafariAvailabilityView
+from paystack import views as paystack_views
+from lodge_backend.dashboard_views import PricesView, ReportsView, SettingsView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-        # Secret staff dashboard (not /admin) - restrict access to staff users
-        path('staff-area-9f3b7d3a-portal/', StaffDashboardView.as_view(), name='staff-dashboard'),
-        # Global availability calendar for frontend to disable fully-booked dates
-        path('api/availability/', AvailabilityCalendarView.as_view(), name='availability-calendar'),
+    # Secret staff dashboard (not /admin) - restrict access to staff users
+    path('staff-area-9f3b7d3a-portal/', StaffDashboardView.as_view(), name='staff-dashboard'),
+    # Global availability calendar for frontend to disable fully-booked dates
+    path('api/availability/', AvailabilityCalendarView.as_view(), name='availability-calendar'),
+    # Safari slot availability per date
+    path('api/safari-availability/', SafariAvailabilityView.as_view(), name='safari-availability'),
     path('api/bookings/', include('bookings.urls')),
     path('api/contact/', include('contact.urls')),
     path('api/newsletter/', include('newsletter.urls')),
+    path('api/paystack/', include('paystack.urls')),
+    # Compatibility routes for frontend expecting /api/payments/ endpoints
+    path('api/payments/initialize/', paystack_views.initialize_payment, name='initialize_payment'),
+    path('api/payments/verify/', paystack_views.verify_payment, name='verify_payment'),
+    # Dashboard endpoints
+    path('api/prices/', PricesView.as_view(), name='prices'),
+    path('api/reports/', ReportsView.as_view(), name='reports'),
+    path('api/settings/', SettingsView.as_view(), name='settings'),
 ]

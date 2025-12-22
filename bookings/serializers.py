@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.utils import timezone
 from datetime import timedelta
 from .models import Booking
+from django.db.models import Sum
 
 
 class BookingSerializer(serializers.ModelSerializer):
@@ -21,14 +22,16 @@ class BookingSerializer(serializers.ModelSerializer):
             'check_in',
             'check_out',
             'guests',
+            'safari_slot',
             'message',
             'status',
             'cancelled_at',
             'cancellation_reason',
             'confirmation_number',
+            'amount',
             'created_at',
         ]
-        read_only_fields = ['id', 'confirmation_number', 'created_at', 'cancelled_at']
+        read_only_fields = ['id', 'confirmation_number', 'created_at', 'cancelled_at', 'amount']
 
     def validate_email(self, value):
         """Validate email format."""
@@ -77,7 +80,8 @@ class BookingSerializer(serializers.ModelSerializer):
             'chalet': {'units': 3, 'min': 1, 'max': 4},
             'campsite': {'units': 10, 'min': 1, 'max': 7},
             'conference': {'units': 1, 'min': 1, 'max': 11},
-            'safari': {'units': 5, 'min': 7, 'max': 10},
+            # Safari: 3 vehicles, 7-10 guests per booking, max daily capacity 30
+            'safari': {'units': 3, 'min': 7, 'max': 10, 'daily_max': 30},
             'event': {'units': 9999, 'min': 1, 'max': 9999},
         }
 
@@ -90,8 +94,33 @@ class BookingSerializer(serializers.ModelSerializer):
                     f"'{booking_type}' bookings must have between {cfg['min']} and {cfg['max']} guests."
                 )
 
-        # Enforce per-date unit availability if dates provided
-        if booking_type and check_in and check_out:
+        # Special handling for safari bookings: require safari_slot and enforce slot/day capacity
+        if booking_type == 'safari':
+            safari_slot = data.get('safari_slot')
+            if not safari_slot:
+                raise serializers.ValidationError({'safari_slot': 'Safari bookings require a time slot (morning|midday|afternoon).'})
+
+            # Use check_in as the safari date
+            if not check_in:
+                raise serializers.ValidationError({'check_in': 'Safari bookings require a check_in date.'})
+
+            # Calculate existing booked guests for that date and slot (exclude cancelled)
+            existing_qs = Booking.objects.filter(
+                type='safari',
+                safari_slot=safari_slot,
+                check_in=check_in,
+            ).exclude(status='cancelled')
+            agg = existing_qs.aggregate(total=Sum('guests'))
+            existing_total = agg.get('total') or 0
+
+            daily_max = capacity['safari']['daily_max']
+            if existing_total + guests > daily_max:
+                raise serializers.ValidationError({
+                    'non_field_errors': ["Selected time slot is fully booked"]
+                })
+
+        # Enforce per-date unit availability for other booking types (by counting overlapping bookings)
+        if booking_type != 'safari' and booking_type and check_in and check_out:
             cfg = capacity.get(booking_type)
             if cfg:
                 units = cfg['units']

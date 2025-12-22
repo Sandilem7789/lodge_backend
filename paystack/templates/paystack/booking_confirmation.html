@@ -1,0 +1,27 @@
+{% if error %}
+<!doctype html>
+<html>
+<head><title>Payment Error</title></head>
+<body>
+  <h1>Payment Error</h1>
+  <p>{{ error }}</p>
+</body>
+</html>
+{% else %}
+<!doctype html>
+<html>
+<head><title>Booking Confirmation</title></head>
+<body>
+  <h1>Booking Confirmed</h1>
+  <p>Order: {{ order.order_id }}</p>
+  <p>Payment Reference: {{ order.reference }}</p>
+  <p>Amount Paid: {{ order.amount }} {{ order.currency }}</p>
+  <h2>Booking Details</h2>
+  <p>Confirmation Number: {{ booking.confirmation_number }}</p>
+  <p>Type: {{ booking.type }}</p>
+  <p>Check-in: {{ booking.check_in }}</p>
+  <p>Check-out: {{ booking.check_out }}</p>
+  <p>Guests: {{ booking.guests }}</p>
+</body>
+</html>
+{% endif %}

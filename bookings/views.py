@@ -6,9 +6,11 @@ from django.utils import timezone
 from django.views.generic import TemplateView
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.utils.decorators import method_decorator
+from decimal import Decimal
 
 from .models import Booking
 from .serializers import BookingSerializer, AvailabilitySerializer
+from .pricing import calculate_booking_amount
 from datetime import timedelta, date
 
 
@@ -21,18 +23,70 @@ class BookingCreateView(APIView):
     def post(self, request):
         serializer = BookingSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            booking = serializer.save()
+            
+            # Calculate amount using seasonal pricing
+            amount = calculate_booking_amount(
+                booking.type,
+                booking.check_in,
+                booking.check_out
+            )
+            
+            # Store amount in booking
+            booking.amount = amount
+            booking.save()
+            
+            # Get or create order for this booking
+            from paystack.models import Order
+            from django.conf import settings
+            
+            order, created = Order.objects.get_or_create(
+                booking=booking,
+                defaults={
+                    'amount': amount,
+                    'currency': settings.PAYSTACK_CURRENCY,
+                    'email': booking.email,
+                    'status': 'pending'
+                }
+            )
+            # Update amount if order already existed
+            if not created:
+                order.amount = amount
+                order.email = booking.email
+                order.save()
+            
+            # Return id, order_id, email, amount, confirmation_number
             return Response(
                 {
-                    'message': 'Booking created successfully.',
-                    'data': serializer.data,
+                    'success': True,
+                    'data': {
+                        'id': booking.id,
+                        'order_id': str(order.order_id),
+                        'email': booking.email,
+                        'amount': float(amount),
+                        'confirmation_number': booking.confirmation_number,
+                    }
                 },
                 status=status.HTTP_201_CREATED,
             )
+        # Format errors for frontend
+        error_message = 'Failed to create booking.'
+        if serializer.errors:
+            # Get first error message
+            first_error = list(serializer.errors.values())[0]
+            if isinstance(first_error, list) and len(first_error) > 0:
+                error_message = first_error[0]
+            elif isinstance(first_error, dict):
+                first_nested = list(first_error.values())[0]
+                if isinstance(first_nested, list) and len(first_nested) > 0:
+                    error_message = first_nested[0]
+        
         return Response(
             {
-                'message': 'Failed to create booking.',
+                'success': False,
+                'error': error_message,
                 'errors': serializer.errors,
+                'details': serializer.errors,  # Frontend expects 'details'
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
@@ -197,9 +251,11 @@ class BookingListCreateView(APIView):
         serializer = BookingSerializer(bookings, many=True)
         return Response(
             {
-                'message': 'Bookings retrieved successfully.',
-                'count': bookings.count(),
-                'data': serializer.data,
+                'success': True,
+                'data': {
+                    'count': bookings.count(),
+                    'items': serializer.data,
+                },
             },
             status=status.HTTP_200_OK,
         )
@@ -208,18 +264,70 @@ class BookingListCreateView(APIView):
         """Create a new booking."""
         serializer = BookingSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            booking = serializer.save()
+            
+            # Calculate amount using seasonal pricing
+            amount = calculate_booking_amount(
+                booking.type,
+                booking.check_in,
+                booking.check_out
+            )
+            
+            # Store amount in booking
+            booking.amount = amount
+            booking.save()
+            
+            # Get or create order for this booking
+            from paystack.models import Order
+            from django.conf import settings
+            
+            order, created = Order.objects.get_or_create(
+                booking=booking,
+                defaults={
+                    'amount': amount,
+                    'currency': settings.PAYSTACK_CURRENCY,
+                    'email': booking.email,
+                    'status': 'pending'
+                }
+            )
+            # Update amount if order already existed
+            if not created:
+                order.amount = amount
+                order.email = booking.email
+                order.save()
+            
+            # Return id, order_id, email, amount, confirmation_number
             return Response(
                 {
-                    'message': 'Booking created successfully.',
-                    'data': serializer.data,
+                    'success': True,
+                    'data': {
+                        'id': booking.id,
+                        'order_id': str(order.order_id),
+                        'email': booking.email,
+                        'amount': float(amount),
+                        'confirmation_number': booking.confirmation_number,
+                    }
                 },
                 status=status.HTTP_201_CREATED,
             )
+        # Format errors for frontend
+        error_message = 'Failed to create booking.'
+        if serializer.errors:
+            # Get first error message
+            first_error = list(serializer.errors.values())[0]
+            if isinstance(first_error, list) and len(first_error) > 0:
+                error_message = first_error[0]
+            elif isinstance(first_error, dict):
+                first_nested = list(first_error.values())[0]
+                if isinstance(first_nested, list) and len(first_nested) > 0:
+                    error_message = first_nested[0]
+        
         return Response(
             {
-                'message': 'Failed to create booking.',
+                'success': False,
+                'error': error_message,
                 'errors': serializer.errors,
+                'details': serializer.errors,  # Frontend expects 'details'
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
@@ -333,7 +441,7 @@ class AvailabilityCalendarView(APIView):
             'chalet': {'units': 3},
             'campsite': {'units': 10},
             'conference': {'units': 1},
-            'safari': {'units': 5},
+            'safari': {'units': 3},
             'event': {'units': 9999},
         }
 
@@ -350,6 +458,37 @@ class AvailabilityCalendarView(APIView):
             day = day + timedelta(days=1)
 
         return Response(result, status=status.HTTP_200_OK)
+
+
+class SafariAvailabilityView(APIView):
+    """
+    Return safari slot bookings for a given date.
+    Endpoint: GET /api/safari-availability/?date=YYYY-MM-DD
+    Response example:
+    {
+      "2025-12-11": {"morning": 10, "midday": 8, "afternoon": 12}
+    }
+    """
+
+    def get(self, request):
+        date_q = request.query_params.get('date')
+        if not date_q:
+            return Response({'message': 'Missing required parameter: date'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            target = date.fromisoformat(date_q)
+        except Exception:
+            return Response({'message': 'Invalid date format. Use YYYY-MM-DD.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Count guests per slot (exclude cancelled)
+        result_slots = {}
+        from django.db.models import Sum
+        for slot_key, _ in Booking.SAFARI_SLOTS:
+            qs = Booking.objects.filter(type='safari', safari_slot=slot_key, check_in=target).exclude(status='cancelled')
+            agg = qs.aggregate(total=Sum('guests'))
+            result_slots[slot_key] = agg.get('total') or 0
+
+        return Response({date_q: result_slots}, status=status.HTTP_200_OK)
 
 
 @method_decorator(login_required, name='dispatch')
