@@ -16,6 +16,7 @@ from bookings.models import Booking
 from bookings.serializers import BookingSerializer
 from .models import Order
 from .serializers import OrderSerializer
+from .utils import rand_to_cents, get_paystack_amount, get_display_amount, validate_amount_not_in_cents
 
 logger = logging.getLogger('paystack')
 
@@ -91,9 +92,12 @@ class InitializePaymentView(APIView):
             order.save()
 
             # Prepare Paystack payload (use customer's email from form)
+            # Convert amount from ZAR (rand) to cents for Paystack
+            amount_cents = get_paystack_amount(amount)
+            
             paystack_payload = {
                 'email': email,
-                'amount': int(Decimal(str(amount))),  # Convert to cents
+                'amount': amount_cents,  # Amount in cents for Paystack
                 'currency': settings.PAYSTACK_CURRENCY,
                 'reference': reference,
                 'callback_url': callback_url,
@@ -135,7 +139,7 @@ class InitializePaymentView(APIView):
                     'message': 'Payment initialized successfully',
                     'data': {
                         'order_id': order.order_id,
-                        'amount': float(order.amount),
+                        'amount': get_display_amount(order.amount),  # Return amount in rand
                         'currency': order.currency,
                         'authorization_url': paystack_response['data']['authorization_url'],
                         'reference': order.reference,
@@ -532,6 +536,10 @@ def initialize_payment(request):
         if amount_override is not None:
             try:
                 amount = Decimal(str(amount_override))
+                # Validate amount is in rand, not cents (prevent double multiplication)
+                validate_amount_not_in_cents(amount)
+            except ValueError as e:
+                return JsonResponse({'success': False, 'error': f'Invalid amount: {str(e)}'}, status=400)
             except (ValueError, TypeError):
                 return JsonResponse({'success': False, 'error': 'Invalid amount format'}, status=400)
         else:
@@ -567,7 +575,7 @@ def initialize_payment(request):
         # Build payload
         paystack_payload = {
             'email': email,
-            'amount': int(Decimal(str(amount)) * 100),
+            'amount': get_paystack_amount(amount),  # Convert ZAR to cents for Paystack
             'currency': settings.PAYSTACK_CURRENCY,
             'reference': reference,
             'callback_url': callback_url,

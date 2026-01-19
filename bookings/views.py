@@ -11,6 +11,7 @@ from decimal import Decimal
 from .models import Booking
 from .serializers import BookingSerializer, AvailabilitySerializer
 from .pricing import calculate_booking_amount
+from paystack.utils import validate_amount_not_in_cents
 from datetime import timedelta, date
 
 
@@ -31,6 +32,18 @@ class BookingCreateView(APIView):
                 booking.check_in,
                 booking.check_out
             )
+            
+            # Validate amount is in rand, not cents (prevent double multiplication)
+            try:
+                validate_amount_not_in_cents(amount)
+            except ValueError as e:
+                return Response(
+                    {
+                        'success': False,
+                        'error': f'Invalid amount: {str(e)}',
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             
             # Store amount in booking
             booking.amount = amount
