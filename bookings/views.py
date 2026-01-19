@@ -432,24 +432,83 @@ class AvailabilityCalendarView(APIView):
     """
     Return fully booked dates per booking category.
     Endpoint: GET /api/availability/?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
-    If no dates provided, defaults to next 30 days.
+    
+    Query Parameters:
+    - start_date (optional): Start date in YYYY-MM-DD format. Defaults to today.
+    - end_date (optional): End date in YYYY-MM-DD format. Defaults to 30 days from start_date.
+    
+    Validation:
+    - start_date cannot be in the past
+    - Both dates must be valid YYYY-MM-DD format
+    
+    Response: JSON with keys per booking type and arrays of fully booked dates.
+    Example:
+    {
+      "chalet": ["2026-01-20", "2026-01-21"],
+      "campsite": [],
+      "conference": [],
+      "safari": ["2026-01-25"],
+      "event": []
+    }
     """
 
     def get(self, request):
-        # Date window
-        start = request.query_params.get('start_date')
-        end = request.query_params.get('end_date')
         today = timezone.now().date()
-        if start:
-            start_date = date.fromisoformat(start)
-        else:
-            start_date = today
-        if end:
-            end_date = date.fromisoformat(end)
-        else:
-            end_date = start_date + timedelta(days=30)
+        start_param = request.query_params.get('start_date')
+        end_param = request.query_params.get('end_date')
+        
+        # Parse and validate start_date
+        try:
+            if start_param:
+                start_date = date.fromisoformat(start_param)
+            else:
+                start_date = today
+        except (ValueError, TypeError):
+            return Response(
+                {
+                    'message': 'Invalid start_date format. Use YYYY-MM-DD.',
+                    'example': f'?start_date={today.isoformat()}'
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Validate start_date is not in the past
+        if start_date < today:
+            return Response(
+                {
+                    'message': f'start_date cannot be in the past. Today is {today.isoformat()}.',
+                    'error': f'Provided: {start_date.isoformat()}',
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Parse and validate end_date
+        try:
+            if end_param:
+                end_date = date.fromisoformat(end_param)
+            else:
+                end_date = start_date + timedelta(days=30)
+        except (ValueError, TypeError):
+            return Response(
+                {
+                    'message': 'Invalid end_date format. Use YYYY-MM-DD.',
+                    'example': f'?end_date={(start_date + timedelta(days=30)).isoformat()}'
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Validate end_date is after start_date
+        if end_date <= start_date:
+            return Response(
+                {
+                    'message': 'end_date must be after start_date.',
+                    'start_date': start_date.isoformat(),
+                    'end_date': end_date.isoformat(),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        # capacity definition must match serializer
+        # Capacity definition (must match serializer and other views)
         capacity = {
             'chalet': {'units': 3},
             'campsite': {'units': 10},
@@ -458,16 +517,29 @@ class AvailabilityCalendarView(APIView):
             'event': {'units': 9999},
         }
 
+        # Initialize result with empty arrays for each booking type
         result = {t[0]: [] for t in Booking.BOOKING_TYPES}
 
+        # Iterate through each day in the window
         day = start_date
         while day <= end_date:
-            for tkey, _ in Booking.BOOKING_TYPES:
-                cfg = capacity.get(tkey, {'units': 9999})
-                units = cfg['units']
-                count = Booking.objects.filter(check_in__lte=day, check_out__gt=day, type=tkey).count()
-                if count >= units:
-                    result[tkey].append(day.isoformat())
+            # Check each booking type for capacity
+            for booking_type, _ in Booking.BOOKING_TYPES:
+                cfg = capacity.get(booking_type, {'units': 9999})
+                max_units = cfg['units']
+                
+                # Count overlapping bookings for this day (exclude cancelled bookings)
+                # A booking overlaps on a day if: check_in <= day AND check_out > day
+                overlapping_count = Booking.objects.filter(
+                    type=booking_type,
+                    check_in__lte=day,
+                    check_out__gt=day,
+                ).exclude(status='cancelled').count()
+                
+                # If fully booked, add to unavailable dates
+                if overlapping_count >= max_units:
+                    result[booking_type].append(day.isoformat())
+            
             day = day + timedelta(days=1)
 
         return Response(result, status=status.HTTP_200_OK)

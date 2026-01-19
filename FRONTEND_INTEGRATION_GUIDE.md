@@ -2,7 +2,7 @@
 ## Ikhaya Lami Lodge — Paystack Payment Integration
 
 **Last Updated:** December 19, 2025  
-**Backend API Base URL:** `http://127.0.0.1:8000` (dev) | `https://yourdomain.com` (prod)
+**Backend API Base URL:** `http://localhost:8000` (dev) | `https://yourdomain.com` (prod)
 
 ---
 
