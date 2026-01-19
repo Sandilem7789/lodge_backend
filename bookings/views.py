@@ -169,6 +169,25 @@ class BookingDetailView(APIView):
     """
     Retrieve a booking by confirmation number.
     Endpoint: GET /api/bookings/<confirmationNumber>/
+    
+    Returns booking details including:
+    - name, type, check_in, check_out, guests
+    - confirmation_number, status, amount
+    
+    Response format:
+    {
+      "success": true,
+      "data": {
+        "name": "Sandile Mathenjwa",
+        "type": "chalet",
+        "check_in": "2026-05-14",
+        "check_out": "2026-05-19",
+        "guests": 2,
+        "confirmation_number": "B0535279-780",
+        "status": "confirmed",
+        "amount": 4000.00
+      }
+    }
     """
 
     def get(self, request, confirmation_number):
@@ -176,31 +195,55 @@ class BookingDetailView(APIView):
             booking = Booking.objects.get(confirmation_number=confirmation_number)
         except Booking.DoesNotExist:
             return Response(
-                {'message': 'Booking not found.'},
+                {
+                    'success': False,
+                    'error': 'Booking not found.',
+                    'confirmation_number': confirmation_number,
+                },
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Check if booking is cancelled and warn in response
         serializer = BookingSerializer(booking)
-        return Response(
-            {
-                'message': 'Booking retrieved successfully.',
-                'data': serializer.data,
-            },
-            status=status.HTTP_200_OK,
-        )
+        response_data = {
+            'success': True,
+            'data': serializer.data,
+        }
+        
+        # Add cancellation info if applicable
+        if booking.status == 'cancelled':
+            response_data['warning'] = 'This booking has been cancelled.'
+            if booking.cancellation_reason:
+                response_data['cancellation_reason'] = booking.cancellation_reason
+            response_data['cancelled_at'] = booking.cancelled_at.isoformat() if booking.cancelled_at else None
+
+        return Response(response_data, status=status.HTTP_200_OK)
     
     def delete(self, request, confirmation_number):
         try:
             booking = Booking.objects.get(confirmation_number=confirmation_number)
         except Booking.DoesNotExist:
             return Response(
-                {'message': 'Booking not found.'},
+                {
+                    'success': False,
+                    'error': 'Booking not found.',
+                    'confirmation_number': confirmation_number,
+                },
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        booking_id = booking.id
+        confirmation_num = booking.confirmation_number
         booking.delete()
         return Response(
-            {'message': 'Booking deleted successfully.'},
+            {
+                'success': True,
+                'message': 'Booking deleted successfully.',
+                'data': {
+                    'id': booking_id,
+                    'confirmation_number': confirmation_num,
+                }
+            },
             status=status.HTTP_200_OK,
         )
 

@@ -264,36 +264,53 @@ class PaystackCallbackView(View):
 @method_decorator(require_http_methods(['GET']), name='dispatch')
 class PaymentConfirmationView(View):
     """
-    Display payment confirmation page.
+    Display payment confirmation details.
     GET /api/paystack/confirmation/<order_id>/
+    
+    Returns order and booking details for confirmation modal.
     """
     
     def get(self, request, order_id):
-        """Return payment confirmation details."""
+        """Return payment confirmation details with booking information."""
         try:
             order = Order.objects.get(order_id=order_id)
-            serializer = OrderSerializer(order)
+            booking = order.booking
             
             return JsonResponse({
-                'message': 'Payment confirmed',
-                'data': serializer.data,
-                'booking': {
-                    'confirmation_number': order.booking.confirmation_number,
-                    'type': order.booking.type,
-                    'check_in': order.booking.check_in,
-                    'check_out': order.booking.check_out,
-                    'guests': order.booking.guests,
+                'success': True,
+                'data': {
+                    'order_id': str(order.order_id),
+                    'reference': order.reference,
+                    'status': order.status,
+                    'amount': float(booking.amount) if booking.amount else None,
+                    'booking': {
+                        'confirmation_number': booking.confirmation_number,
+                        'name': booking.name,
+                        'type': booking.type,
+                        'check_in': booking.check_in.isoformat() if booking.check_in else None,
+                        'check_out': booking.check_out.isoformat() if booking.check_out else None,
+                        'guests': booking.guests,
+                        'email': booking.email,
+                        'phone': booking.phone,
+                    }
                 }
             }, status=200)
         except Order.DoesNotExist:
             return JsonResponse(
-                {'message': 'Order not found'},
+                {
+                    'success': False,
+                    'error': 'Order not found',
+                    'order_id': order_id,
+                },
                 status=404
             )
         except Exception as e:
             logger.error(f"Error in payment_confirmation: {str(e)}")
             return JsonResponse(
-                {'message': 'An error occurred'},
+                {
+                    'success': False,
+                    'error': 'An error occurred',
+                },
                 status=500
             )
 
@@ -425,13 +442,19 @@ def verify_payment(request):
                 
                 logger.info(f"Order {order.order_id} marked as paid, booking {booking.id} confirmed")
                 
+                # Return booking details for frontend confirmation modal
                 return JsonResponse({
                     'success': True,
                     'data': {
-                        'booking_id': booking.id,
-                        'order_id': str(order.order_id),
-                        'status': 'paid',
                         'reference': reference,
+                        'confirmation_number': booking.confirmation_number,
+                        'booking': {
+                            'name': booking.name,
+                            'type': booking.type,
+                            'check_in': booking.check_in.isoformat() if booking.check_in else None,
+                            'check_out': booking.check_out.isoformat() if booking.check_out else None,
+                            'guests': booking.guests,
+                        }
                     }
                 }, status=200)
             else:
@@ -441,14 +464,18 @@ def verify_payment(request):
                 logger.warning(f"Payment failed for order {order.order_id}")
                 return JsonResponse({
                     'success': False,
-                    'error': 'Payment verification failed',
-                    'status': 'failed',
+                    'error': 'Payment not verified',
+                    'reference': reference,
                 }, status=400)
         else:
             # Verification failed
             error_msg = paystack_response.get('message', 'Verification failed')
             logger.error(f"Paystack verification error: {error_msg}")
-            return JsonResponse({'success': False, 'error': error_msg}, status=400)
+            return JsonResponse({
+                'success': False,
+                'error': 'Payment not verified',
+                'details': error_msg,
+            }, status=400)
     
     except requests.RequestException as e:
         logger.error(f"Paystack verification API error: {str(e)}")

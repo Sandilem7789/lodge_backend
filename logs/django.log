@@ -6852,3 +6852,23 @@ WARNING 2026-01-19 14:08:33,302 log 57916 23684 Bad Request: /api/bookings/
 WARNING 2026-01-19 14:08:50,937 log 57916 23684 Bad Request: /api/bookings/
 INFO 2026-01-19 16:13:34,889 autoreload 60892 35796 Watching for file changes with StatReloader
 WARNING 2026-01-19 16:15:36,033 log 60892 62204 Bad Request: /api/bookings/
+INFO 2026-01-19 16:25:32,822 autoreload 43800 37164 Watching for file changes with StatReloader
+WARNING 2026-01-19 16:36:28,428 log 43800 54820 Bad Request: /api/bookings/
+INFO 2026-01-19 16:44:21,373 autoreload 43800 37164 C:\Users\sandi\Documents\Coding\lodge_backend\bookings\views.py changed, reloading.
+INFO 2026-01-19 16:44:22,367 autoreload 35780 14808 Watching for file changes with StatReloader
+INFO 2026-01-19 16:44:28,246 autoreload 35780 14808 C:\Users\sandi\Documents\Coding\lodge_backend\bookings\views.py changed, reloading.
+INFO 2026-01-19 16:44:28,970 autoreload 2368 40708 Watching for file changes with StatReloader
+INFO 2026-01-19 16:45:12,532 autoreload 2368 40708 C:\Users\sandi\Documents\Coding\lodge_backend\bookings\views.py changed, reloading.
+INFO 2026-01-19 16:45:13,345 autoreload 42488 41436 Watching for file changes with StatReloader
+INFO 2026-01-19 16:55:11,972 autoreload 42488 41436 C:\Users\sandi\Documents\Coding\lodge_backend\paystack\views.py changed, reloading.
+INFO 2026-01-19 16:55:12,703 autoreload 62100 55488 Watching for file changes with StatReloader
+INFO 2026-01-19 16:55:16,509 autoreload 62100 55488 C:\Users\sandi\Documents\Coding\lodge_backend\paystack\views.py changed, reloading.
+INFO 2026-01-19 16:55:17,206 autoreload 61560 5416 Watching for file changes with StatReloader
+INFO 2026-01-19 16:55:31,566 autoreload 61560 5416 C:\Users\sandi\Documents\Coding\lodge_backend\paystack\views.py changed, reloading.
+INFO 2026-01-19 16:55:32,313 autoreload 34040 44060 Watching for file changes with StatReloader
+INFO 2026-01-19 16:55:33,995 autoreload 34040 44060 C:\Users\sandi\Documents\Coding\lodge_backend\paystack\views.py changed, reloading.
+INFO 2026-01-19 16:55:34,755 autoreload 22056 51752 Watching for file changes with StatReloader
+INFO 2026-01-19 17:08:19,149 autoreload 22056 51752 C:\Users\sandi\Documents\Coding\lodge_backend\paystack\views.py changed, reloading.
+INFO 2026-01-19 17:08:19,839 autoreload 51840 51744 Watching for file changes with StatReloader
+INFO 2026-01-19 17:08:27,859 autoreload 51840 51744 C:\Users\sandi\Documents\Coding\lodge_backend\paystack\views.py changed, reloading.
+INFO 2026-01-19 17:08:28,529 autoreload 50592 47756 Watching for file changes with StatReloader
