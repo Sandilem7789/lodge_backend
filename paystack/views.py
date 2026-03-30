@@ -448,6 +448,9 @@ def verify_payment(request):
                     'data': {
                         'reference': reference,
                         'confirmation_number': booking.confirmation_number,
+                        'booking_id': str(booking.id),
+                        'amount': float(order.amount),
+                        'email': order.email,
                         'booking': {
                             'name': booking.name,
                             'type': booking.type,
