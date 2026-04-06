@@ -37,6 +37,7 @@ def generate_payfast_signature(data: dict, passphrase: str = None) -> str:
         encoded_pass = urllib.parse.quote_plus(passphrase.strip())
         query_string += f"&passphrase={encoded_pass}"
 
+    logger.debug("PayFast signature string: %s", query_string)
     return hashlib.md5(query_string.encode('utf-8')).hexdigest()
 
 

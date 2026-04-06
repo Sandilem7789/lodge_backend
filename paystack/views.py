@@ -59,26 +59,31 @@ def _build_payfast_params(order, booking, email, return_url, cancel_url, notify_
     sandbox = getattr(settings, 'PAYFAST_SANDBOX', True)
     buyer_email = 'sbtu01@payfast.co.za' if sandbox else email
 
-    # Field order MUST match PayFast's expected order for correct signature generation
+    # PayFast required field order (must match exactly for valid MD5 signature):
+    # merchant → URLs → customer info → payment info
     params = OrderedDict([
         ('merchant_id', settings.PAYFAST_MERCHANT_ID),
         ('merchant_key', settings.PAYFAST_MERCHANT_KEY),
         ('return_url', return_url),
         ('cancel_url', cancel_url),
         ('notify_url', notify_url),
-        ('m_payment_id', str(order.order_id)),
-        ('amount', amount_str),
-        ('item_name', item_name),
-        ('email_address', buyer_email),
         ('name_first', first_name),
     ])
 
     if last_name:
         params['name_last'] = last_name
 
+    params['email_address'] = buyer_email
+    params['m_payment_id'] = str(order.order_id)
+    params['amount'] = amount_str
+    params['item_name'] = item_name
+
     passphrase = getattr(settings, 'PAYFAST_PASSPHRASE', '')
     signature = generate_payfast_signature(params, passphrase)
     params['signature'] = signature
+
+    logger.debug("PayFast params for signature: %s", {k: v for k, v in params.items() if k != 'signature'})
+    logger.debug("PayFast signature: %s", signature)
 
     return params
 
