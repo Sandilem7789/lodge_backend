@@ -1,14 +1,10 @@
-import requests
 import logging
+from collections import OrderedDict
 from decimal import Decimal
 from django.conf import settings
-from django.shortcuts import redirect, render
-from django.urls import reverse
-from django.views import View
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
-from django.utils.decorators import method_decorator
-from django.http import JsonResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -16,573 +12,191 @@ from bookings.models import Booking
 from bookings.serializers import BookingSerializer
 from .models import Order
 from .serializers import OrderSerializer
-from .utils import rand_to_cents, get_paystack_amount, get_display_amount, validate_amount_not_in_cents
+from .utils import (
+    generate_payfast_signature,
+    validate_payfast_itn,
+    validate_amount_not_in_cents,
+    format_payfast_amount,
+)
 
-logger = logging.getLogger('paystack')
+logger = logging.getLogger('payfast')
 
-# Paystack API endpoints
-PAYSTACK_INITIALIZE_URL = 'https://api.paystack.co/transaction/initialize'
-PAYSTACK_VERIFY_URL = 'https://api.paystack.co/transaction/verify'
-
-
-class InitializePaymentView(APIView):
-    """
-    Initialize a Paystack payment for a booking.
-    POST /api/paystack/initialize-payment/
-    
-    Payload:
-    {
-        "booking_id": 123,
-        "email": "customer@example.com",
-        "callback_url": "https://yourdomain.com/payment-callback/"
-    }
-    """
-    
-    def post(self, request):
-        """Initialize Paystack transaction."""
-        try:
-            booking_id = request.data.get('booking_id')
-            email = request.data.get('email')
-            callback_url = request.data.get('callback_url')
-            
-            # Validate inputs
-            if not all([booking_id, email, callback_url]):
-                return Response(
-                    {'message': 'Missing required fields: booking_id, email, callback_url'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            # Get booking
-            try:
-                booking = Booking.objects.get(id=booking_id)
-            except Booking.DoesNotExist:
-                return Response(
-                    {'message': 'Booking not found'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-            
-            # Check if order already exists for this booking
-            existing_order = Order.objects.filter(booking=booking).first()
-            if existing_order and existing_order.status == 'paid':
-                return Response(
-                    {'message': 'Booking already paid'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            # Calculate amount based on booking type and duration
-            amount = self._calculate_amount(booking)
-            
-            # Create order record
-            if existing_order:
-                order = existing_order
-                order.amount = amount
-                order.email = email
-                order.status = 'pending'
-            else:
-                order = Order.objects.create(
-                    booking=booking,
-                    amount=amount,
-                    currency=settings.PAYSTACK_CURRENCY,
-                    email=email,
-                    status='pending'
-                )
-            # Ensure a stable reference is set and stored on the order
-            reference = str(order.order_id)
-            order.reference = reference
-            order.save()
-
-            # Prepare Paystack payload (use customer's email from form)
-            # Convert amount from ZAR (rand) to cents for Paystack
-            amount_cents = get_paystack_amount(amount)
-            
-            paystack_payload = {
-                'email': email,
-                'amount': amount_cents,  # Amount in cents for Paystack
-                'currency': settings.PAYSTACK_CURRENCY,
-                'reference': reference,
-                'callback_url': callback_url,
-                'metadata': {
-                    'booking_id': booking.id,
-                    'booking_type': booking.type,
-                    'guests': booking.guests,
-                    'confirmation_number': booking.confirmation_number,
-                }
-            }
-            
-            logger.info(f"Initializing Paystack payment for order {order.order_id}")
-            logger.debug(f"Customer email: {email}")
-            logger.debug(f"Paystack payload: {paystack_payload}")
-            
-            # Call Paystack API
-            headers = {
-                'Authorization': f'Bearer {settings.PAYSTACK_SECRET_KEY}',
-                'Content-Type': 'application/json'
-            }
-            
-            response = requests.post(
-                PAYSTACK_INITIALIZE_URL,
-                json=paystack_payload,
-                headers=headers,
-                timeout=10
-            )
-            response.raise_for_status()
-            
-            paystack_response = response.json()
-            logger.info(f"Paystack initialize response: {paystack_response}")
-
-            if paystack_response.get('status'):
-                # store/refine reference from Paystack (normally same as provided)
-                order.reference = paystack_response['data'].get('reference', reference)
-                order.save()
-
-                return Response({
-                    'message': 'Payment initialized successfully',
-                    'data': {
-                        'order_id': order.order_id,
-                        'amount': get_display_amount(order.amount),  # Return amount in rand
-                        'currency': order.currency,
-                        'authorization_url': paystack_response['data']['authorization_url'],
-                        'reference': order.reference,
-                    }
-                }, status=status.HTTP_201_CREATED)
-            else:
-                error_msg = paystack_response.get('message', 'Payment initialization failed')
-                logger.error(f"Paystack error: {error_msg}")
-                return Response(
-                    {'message': f'Payment initialization failed: {error_msg}'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        
-        except requests.RequestException as e:
-            logger.error(f"Paystack API error: {str(e)}")
-            return Response(
-                {'message': 'Payment service error. Please try again.'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
-        except Exception as e:
-            logger.error(f"Unexpected error in initialize_payment: {str(e)}")
-            return Response(
-                {'message': 'An unexpected error occurred'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-    
-    def _calculate_amount(self, booking):
-        """Calculate booking amount based on type and duration."""
-        # Pricing per night/unit (customize based on your rates)
-        pricing = {
-            'chalet': Decimal('800.00'),
-            'campsite': Decimal('200.00'),
-            'conference': Decimal('5000.00'),
-            'safari': Decimal('2500.00'),
-            'event': Decimal('1000.00'),
-        }
-        
-        base_price = pricing.get(booking.type, Decimal('500.00'))
-        
-        # For safari, use check_in only; others use stay duration
-        if booking.type == 'safari':
-            return base_price
-        else:
-            duration = (booking.check_out - booking.check_in).days
-            return base_price * max(duration, 1)
+PAYFAST_ONSITE_URL_SANDBOX = 'https://sandbox.payfast.co.za/onsite/process'
+PAYFAST_ONSITE_URL_LIVE = 'https://www.payfast.co.za/onsite/process'
 
 
-class PaystackCallbackView(View):
-    """
-    Paystack callback view - called after user completes payment.
-    GET /api/paystack/callback/?reference=<paystack_reference>
-    """
-    
-    def get(self, request):
-        """Verify Paystack transaction and update order status."""
-        try:
-            reference = request.GET.get('reference')
-            
-            if not reference:
-                logger.warning('Paystack callback missing reference parameter')
-                return redirect('/payment-failed/?message=Missing%20reference')
-            
-            logger.info(f"Processing Paystack callback for reference: {reference}")
-            
-            # Find order by reference
-            order = Order.objects.filter(reference=reference).first()
-            if not order:
-                logger.warning(f"Order not found for reference: {reference}")
-                return redirect('/payment-failed/?message=Order%20not%20found')
-            
-            # Verify transaction with Paystack
-            headers = {
-                'Authorization': f'Bearer {settings.PAYSTACK_SECRET_KEY}',
-            }
-            
-            verify_url = f'{PAYSTACK_VERIFY_URL}/{reference}'
-            response = requests.get(
-                verify_url,
-                headers=headers,
-                timeout=10
-            )
-            response.raise_for_status()
-            
-            paystack_response = response.json()
-            logger.info(f"Paystack verify response: {paystack_response}")
-            
-            if paystack_response.get('status'):
-                transaction = paystack_response.get('data', {})
-                
-                if transaction.get('status') == 'success':
-                    # Payment successful
-                    order.status = 'paid'
-                    order.save()
-                    logger.info(f"Order {order.order_id} marked as paid")
-
-                    # Redirect to booking confirmation page (frontend route)
-                    try:
-                        url = reverse('paystack:booking-confirmation', args=[order.order_id])
-                    except Exception:
-                        url = f'/api/paystack/booking-confirmation/{order.order_id}/'
-                    return redirect(url)
-                else:
-                    # Payment failed
-                    order.status = 'failed'
-                    order.save()
-                    logger.warning(f"Payment failed for order {order.order_id}")
-                    return redirect(f'/payment-failed/?reference={reference}')
-            else:
-                # Verification failed
-                error_msg = paystack_response.get('message', 'Verification failed')
-                logger.error(f"Paystack verification error: {error_msg}")
-                return redirect(f'/payment-failed/?message={error_msg}')
-        
-        except requests.RequestException as e:
-            logger.error(f"Paystack verification API error: {str(e)}")
-            return redirect('/payment-failed/?message=Service%20error')
-        except Exception as e:
-            logger.error(f"Unexpected error in paystack_callback: {str(e)}")
-            return redirect('/payment-failed/?message=Unexpected%20error')
-
-
-@method_decorator(require_http_methods(['GET']), name='dispatch')
-class PaymentConfirmationView(View):
-    """
-    Display payment confirmation details.
-    GET /api/paystack/confirmation/<order_id>/
-    
-    Returns order and booking details for confirmation modal.
-    """
-    
-    def get(self, request, order_id):
-        """Return payment confirmation details with booking information."""
-        try:
-            order = Order.objects.get(order_id=order_id)
-            booking = order.booking
-            
-            return JsonResponse({
-                'success': True,
-                'data': {
-                    'order_id': str(order.order_id),
-                    'reference': order.reference,
-                    'status': order.status,
-                    'amount': float(booking.amount) if booking.amount else None,
-                    'booking': {
-                        'confirmation_number': booking.confirmation_number,
-                        'name': booking.name,
-                        'type': booking.type,
-                        'check_in': booking.check_in.isoformat() if booking.check_in else None,
-                        'check_out': booking.check_out.isoformat() if booking.check_out else None,
-                        'guests': booking.guests,
-                        'email': booking.email,
-                        'phone': booking.phone,
-                    }
-                }
-            }, status=200)
-        except Order.DoesNotExist:
-            return JsonResponse(
-                {
-                    'success': False,
-                    'error': 'Order not found',
-                    'order_id': order_id,
-                },
-                status=404
-            )
-        except Exception as e:
-            logger.error(f"Error in payment_confirmation: {str(e)}")
-            return JsonResponse(
-                {
-                    'success': False,
-                    'error': 'An error occurred',
-                },
-                status=500
-            )
-
-
-@require_http_methods(['GET'])
-def booking_confirmation(request, order_id):
-    """Render booking confirmation page only when payment is verified (paid)."""
-    try:
-        order = Order.objects.get(order_id=order_id)
-
-        if order.status != 'paid':
-            logger.warning(f"Attempt to view confirmation for unpaid order {order.order_id}")
-            context = {'error': 'Payment not completed for this booking.'}
-            return render(request, 'paystack/booking_confirmation.html', context)
-
-        # Payment is paid — show booking details
-        context = {
-            'order': order,
-            'booking': order.booking,
-        }
-        return render(request, 'paystack/booking_confirmation.html', context)
-    except Order.DoesNotExist:
-        return render(request, 'paystack/booking_confirmation.html', {'error': 'Order not found.'})
-    except Exception as e:
-        logger.error(f"Error rendering booking confirmation: {str(e)}")
-        return render(request, 'paystack/booking_confirmation.html', {'error': 'An unexpected error occurred.'})
-
-
-class OrderListView(APIView):
-    """
-    List orders (staff-only endpoint).
-    GET /api/paystack/orders/
-    """
-    
-    def get(self, request):
-        """List all orders with optional filters."""
-        try:
-            orders = Order.objects.all()
-            
-            # Optional filters
-            status_filter = request.query_params.get('status')
-            if status_filter:
-                orders = orders.filter(status=status_filter)
-            
-            booking_id = request.query_params.get('booking_id')
-            if booking_id:
-                orders = orders.filter(booking_id=booking_id)
-            
-            serializer = OrderSerializer(orders, many=True)
-            return Response({
-                'message': 'Orders retrieved successfully',
-                'count': orders.count(),
-                'data': serializer.data,
-            }, status=status.HTTP_200_OK)
-        except Exception as e:
-            logger.error(f"Error in order_list: {str(e)}")
-            return Response(
-                {'message': 'An error occurred'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+def _get_payfast_onsite_url():
+    if getattr(settings, 'PAYFAST_SANDBOX', True):
+        return PAYFAST_ONSITE_URL_SANDBOX
+    return PAYFAST_ONSITE_URL_LIVE
 
 
 def _parse_request_data(request):
-    """Helper to parse JSON or form data for POST requests."""
-    data = {}
+    """Parse JSON or form-encoded POST body."""
+    import json
     try:
-        if request.content_type == 'application/json':
-            import json
-            data = json.loads(request.body.decode('utf-8') or '{}')
-        else:
-            # form-encoded or multipart
-            data = request.POST.dict()
+        if 'application/json' in request.content_type:
+            return json.loads(request.body.decode('utf-8') or '{}')
+        return request.POST.dict()
     except Exception:
-        data = {}
-    return data
+        return {}
 
 
-@csrf_exempt
-@require_http_methods(['POST'])
-def verify_payment(request):
+def _build_payfast_params(order, booking, email, return_url, cancel_url, notify_url):
     """
-    Verify Paystack payment reference and update booking status.
-    POST /api/payments/verify/
-    
-    Expects: { "reference": "paystack_reference" }
-    Returns: { "success": true, "booking_id": ..., "status": "paid" } or { "success": false, "error": "..." }
+    Build the PayFast form parameters in the required field order.
+    Returns an OrderedDict — the order matters for signature generation.
     """
-    try:
-        data = _parse_request_data(request)
-        logger.debug(f"Incoming verify_payment request data: {data}")
-        
-        reference = data.get('reference')
-        if not reference:
-            return JsonResponse({'success': False, 'error': 'reference is required'}, status=400)
-        
-        # Find order by reference
-        order = Order.objects.filter(reference=reference).first()
-        if not order:
-            return JsonResponse({'success': False, 'error': 'Order not found'}, status=404)
-        
-        # Verify transaction with Paystack
-        headers = {
-            'Authorization': f'Bearer {settings.PAYSTACK_SECRET_KEY}',
-        }
-        
-        verify_url = f'{PAYSTACK_VERIFY_URL}/{reference}'
-        response = requests.get(
-            verify_url,
-            headers=headers,
-            timeout=10
-        )
-        response.raise_for_status()
-        
-        paystack_response = response.json()
-        logger.info(f"Paystack verify response: {paystack_response}")
-        
-        if paystack_response.get('status'):
-            transaction = paystack_response.get('data', {})
-            
-            if transaction.get('status') == 'success':
-                # Payment successful
-                order.status = 'paid'
-                order.save()
-                
-                # Update booking status to confirmed
-                booking = order.booking
-                booking.status = 'confirmed'
-                booking.save()
-                
-                logger.info(f"Order {order.order_id} marked as paid, booking {booking.id} confirmed")
-                
-                # Return booking details for frontend confirmation modal
-                return JsonResponse({
-                    'success': True,
-                    'data': {
-                        'reference': reference,
-                        'confirmation_number': booking.confirmation_number,
-                        'booking_id': str(booking.id),
-                        'amount': float(order.amount),
-                        'email': order.email,
-                        'booking': {
-                            'name': booking.name,
-                            'type': booking.type,
-                            'check_in': booking.check_in.isoformat() if booking.check_in else None,
-                            'check_out': booking.check_out.isoformat() if booking.check_out else None,
-                            'guests': booking.guests,
-                        }
-                    }
-                }, status=200)
-            else:
-                # Payment failed
-                order.status = 'failed'
-                order.save()
-                logger.warning(f"Payment failed for order {order.order_id}")
-                return JsonResponse({
-                    'success': False,
-                    'error': 'Payment not verified',
-                    'reference': reference,
-                }, status=400)
-        else:
-            # Verification failed
-            error_msg = paystack_response.get('message', 'Verification failed')
-            logger.error(f"Paystack verification error: {error_msg}")
-            return JsonResponse({
-                'success': False,
-                'error': 'Payment not verified',
-                'details': error_msg,
-            }, status=400)
-    
-    except requests.RequestException as e:
-        logger.error(f"Paystack verification API error: {str(e)}")
-        return JsonResponse({'success': False, 'error': 'Payment service error'}, status=503)
-    except Exception as e:
-        logger.error(f"Unexpected error in verify_payment: {str(e)}")
-        return JsonResponse({'success': False, 'error': 'Internal server error'}, status=500)
+    name_parts = (booking.name or 'Guest').strip().split(' ', 1)
+    first_name = name_parts[0]
+    last_name = name_parts[1] if len(name_parts) > 1 else ''
 
+    amount_str = format_payfast_amount(order.amount)
+    item_name = f"Ikhaya Lami Lodge - {booking.type.capitalize()} Booking"
+
+    # In sandbox mode PayFast rejects when the buyer email matches the merchant account.
+    # Use PayFast's dedicated sandbox buyer account to avoid this.
+    sandbox = getattr(settings, 'PAYFAST_SANDBOX', True)
+    buyer_email = 'sbtu01@payfast.co.za' if sandbox else email
+
+    # Field order MUST match PayFast's expected order for correct signature generation
+    params = OrderedDict([
+        ('merchant_id', settings.PAYFAST_MERCHANT_ID),
+        ('merchant_key', settings.PAYFAST_MERCHANT_KEY),
+        ('return_url', return_url),
+        ('cancel_url', cancel_url),
+        ('notify_url', notify_url),
+        ('m_payment_id', str(order.order_id)),
+        ('amount', amount_str),
+        ('item_name', item_name),
+        ('email_address', buyer_email),
+        ('name_first', first_name),
+    ])
+
+    if last_name:
+        params['name_last'] = last_name
+
+    passphrase = getattr(settings, 'PAYFAST_PASSPHRASE', '')
+    signature = generate_payfast_signature(params, passphrase)
+    params['signature'] = signature
+
+    return params
+
+
+# ---------------------------------------------------------------------------
+# Main payment endpoints
+# ---------------------------------------------------------------------------
 
 @csrf_exempt
 @require_http_methods(['POST'])
 def initialize_payment(request):
-    """Function-based view to match frontend route `/api/payments/initialize/`.
+    """
+    Initialize a PayFast payment for a booking.
+    POST /api/payments/initialize/
 
-    Accepts either:
-    1. { email, amount, booking_id, order_id } - to initialize payment for existing booking
-    2. Full booking details (type, name, email, etc.) - to create booking and initialize payment
-    
-    Returns JSON with Paystack `authorization_url`, `reference`, and `booking_id`.
+    Accepts:
+        { email, amount, booking_id, order_id, callback_url, cancel_url }
+      OR full booking details (type, name, email, phone, ...)
+
+    Returns:
+        { success: true, data: { payfast_url, params, reference, booking_id } }
     """
     try:
-        # log basic request info for debugging (method, content type, origin)
-        logger.debug(f"initialize_payment called: method={request.method}, content_type={request.content_type}, origin={request.META.get('HTTP_ORIGIN')}")
-        logger.debug(f"Request headers: { {k: v for k, v in request.META.items() if k.startswith('HTTP_') or k in ['CONTENT_TYPE','CONTENT_LENGTH']} }")
+        logger.debug(
+            "initialize_payment: method=%s content_type=%s origin=%s",
+            request.method, request.content_type, request.META.get('HTTP_ORIGIN'),
+        )
 
         data = _parse_request_data(request)
-        logger.debug(f"Incoming initialize_payment request data: {data}")
+        logger.debug("initialize_payment request data: %s", data)
 
         email = data.get('email')
         booking_id = data.get('booking_id')
         order_id = data.get('order_id')
-        amount_override = data.get('amount')  # Amount from request (required if provided)
-        callback_url = data.get('callback_url') or request.build_absolute_uri('/api/paystack/callback/')
+        amount_override = data.get('amount')
+        callback_url = data.get('callback_url') or data.get('return_url')
+        cancel_url = data.get('cancel_url')
+
+        # Derive frontend origin for default URLs
+        origin = (
+            request.META.get('HTTP_ORIGIN')
+            or getattr(settings, 'FRONTEND_URL', '')
+            or 'http://localhost:5173'
+        )
+        return_url = callback_url or f"{origin}/payment-callback/"
+        cancel_url = cancel_url or f"{origin}/"
+        notify_url = request.build_absolute_uri('/api/payments/notify/')
 
         booking = None
         order = None
-        
-        # Case 1: Check if booking_id or order_id is provided (existing booking)
+
+        # --- Resolve booking ---
         if booking_id:
             try:
                 booking = Booking.objects.get(id=booking_id)
             except Booking.DoesNotExist:
-                return JsonResponse({'success': False, 'error': 'Order not found'}, status=404)
+                return JsonResponse({'success': False, 'error': 'Booking not found'}, status=404)
         elif order_id:
             order = Order.objects.filter(order_id=order_id).first()
             if order:
                 booking = order.booking
             else:
                 return JsonResponse({'success': False, 'error': 'Order not found'}, status=404)
-        
-        # Case 2: If no booking_id/order_id, check if full booking details are provided
+
+        # --- Create booking from full details if not found ---
         if not booking:
-            booking_data_keys = {'type', 'name', 'email', 'phone', 'check_in', 'check_out', 'guests', 'safari_slot', 'message'}
-            provided_keys = set(k for k in data.keys())
-            if provided_keys & booking_data_keys:
-                # Build serializer input from available fields
-                serializer_input = {k: data.get(k) for k in booking_data_keys if data.get(k) is not None}
-                # Ensure email/name/type present
-                if not serializer_input.get('email') or not serializer_input.get('name') or not serializer_input.get('type'):
-                    return JsonResponse({'success': False, 'error': 'Insufficient booking data (name, email, type required)'}, status=400)
+            booking_keys = {'type', 'name', 'email', 'phone', 'check_in', 'check_out', 'guests'}
+            if set(data.keys()) & booking_keys:
+                serializer_input = {k: data[k] for k in booking_keys if data.get(k) is not None}
+                if not all(serializer_input.get(k) for k in ('email', 'name', 'type')):
+                    return JsonResponse(
+                        {'success': False, 'error': 'Insufficient booking data (name, email, type required)'},
+                        status=400,
+                    )
                 serializer = BookingSerializer(data=serializer_input)
                 if serializer.is_valid():
                     booking = serializer.save()
-                    # Use email from booking if not provided separately
-                    if not email:
-                        email = booking.email
+                    email = email or booking.email
                 else:
-                    logger.error(f"Booking validation errors: {serializer.errors}")
-                    return JsonResponse({'success': False, 'error': 'Invalid booking data', 'errors': serializer.errors}, status=400)
+                    logger.error("Booking validation errors: %s", serializer.errors)
+                    return JsonResponse(
+                        {'success': False, 'error': 'Invalid booking data', 'errors': serializer.errors},
+                        status=400,
+                    )
             else:
-                return JsonResponse({'success': False, 'error': 'Either booking_id/order_id or full booking details are required'}, status=400)
+                return JsonResponse(
+                    {'success': False, 'error': 'booking_id, order_id, or full booking details are required'},
+                    status=400,
+                )
 
-        # Validate email is present
         if not email:
             return JsonResponse({'success': False, 'error': 'email is required'}, status=400)
 
-        # Check for existing paid order
+        # --- Resolve or create order ---
         if not order:
             order = Order.objects.filter(booking=booking).first()
-        
+
         if order and order.status == 'paid':
             return JsonResponse({'success': False, 'error': 'Booking already paid'}, status=400)
 
-        # Use amount from request if provided, otherwise calculate from booking
+        # --- Determine amount ---
         if amount_override is not None:
             try:
                 amount = Decimal(str(amount_override))
-                # Validate amount is in rand, not cents (prevent double multiplication)
                 validate_amount_not_in_cents(amount)
-            except ValueError as e:
-                return JsonResponse({'success': False, 'error': f'Invalid amount: {str(e)}'}, status=400)
-            except (ValueError, TypeError):
-                return JsonResponse({'success': False, 'error': 'Invalid amount format'}, status=400)
+            except (ValueError, TypeError) as exc:
+                return JsonResponse({'success': False, 'error': f'Invalid amount: {exc}'}, status=400)
+        elif order and order.amount:
+            amount = order.amount
+        elif booking.amount:
+            amount = booking.amount
         else:
-            # Calculate from booking (use stored amount or calculate)
-            if booking.amount:
-                amount = booking.amount
-            else:
-                from bookings.pricing import calculate_booking_amount
-                amount = calculate_booking_amount(booking.type, booking.check_in, booking.check_out)
-                booking.amount = amount
-                booking.save()
+            from bookings.pricing import calculate_booking_amount
+            amount = calculate_booking_amount(booking.type, booking.check_in, booking.check_out)
+            booking.amount = amount
+            booking.save()
 
-        # Create or update order
+        # --- Create / update order ---
         if order:
             order.amount = amount
             order.email = email
@@ -592,60 +206,190 @@ def initialize_payment(request):
             order = Order.objects.create(
                 booking=booking,
                 amount=amount,
-                currency=settings.PAYSTACK_CURRENCY,
+                currency='ZAR',
                 email=email,
-                status='pending'
+                status='pending',
             )
 
-        # Ensure reference stored
+        # Use order_id as our stable reference (m_payment_id for PayFast)
         reference = str(order.order_id)
         order.reference = reference
         order.save()
 
-        # Build payload
-        paystack_payload = {
-            'email': email,
-            'amount': get_paystack_amount(amount),  # Convert ZAR to cents for Paystack
-            'currency': settings.PAYSTACK_CURRENCY,
-            'reference': reference,
-            'callback_url': callback_url,
-            'metadata': {'booking_id': booking.id},
-        }
+        # --- Build PayFast params and return to frontend for form redirect ---
+        params = _build_payfast_params(order, booking, email, return_url, cancel_url, notify_url)
+        sandbox = getattr(settings, 'PAYFAST_SANDBOX', True)
+        payfast_url = (
+            'https://sandbox.payfast.co.za/eng/process'
+            if sandbox else
+            'https://www.payfast.co.za/eng/process'
+        )
 
-        logger.debug(f"initialize_payment payload: {paystack_payload}")
+        logger.info(
+            "PayFast redirect: reference=%s amount=%s booking=%s url=%s",
+            reference, amount, booking.id, payfast_url,
+        )
+        logger.debug("PayFast params: %s", dict(params))
 
-        headers = {
-            'Authorization': f'Bearer {settings.PAYSTACK_SECRET_KEY}',
-            'Content-Type': 'application/json'
-        }
+        return JsonResponse({
+            'success': True,
+            'data': {
+                'payfast_url': payfast_url,
+                'params': dict(params),
+                'reference': reference,
+                'booking_id': booking.id,
+            },
+        }, status=201)
 
-        response = requests.post(PAYSTACK_INITIALIZE_URL, json=paystack_payload, headers=headers, timeout=10)
-        logger.debug("Paystack raw response: %s %s", response.status_code, response.text)
+    except Exception as exc:
+        logger.exception("Error in initialize_payment: %s", exc)
+        return JsonResponse({'success': False, 'error': 'Internal server error'}, status=500)
 
-        try:
-            paystack_response = response.json()
-        except ValueError:
-            return JsonResponse({'success': False, 'error': 'Invalid JSON from Paystack', 'raw': response.text}, status=response.status_code)
 
-        if response.status_code == 200 and paystack_response.get('status'):
-            order.reference = paystack_response['data'].get('reference', reference)
+@csrf_exempt
+@require_http_methods(['POST'])
+def verify_payment(request):
+    """
+    Verify payment status for a given reference (m_payment_id).
+    POST /api/payments/verify/
+
+    Accepts: { "reference": "<m_payment_id>" }
+    Returns booking confirmation details if payment is marked as paid.
+    """
+    try:
+        data = _parse_request_data(request)
+        logger.debug("verify_payment request data: %s", data)
+
+        reference = data.get('reference')
+        if not reference:
+            return JsonResponse({'success': False, 'error': 'reference is required'}, status=400)
+
+        order = Order.objects.filter(reference=reference).first()
+        if not order:
+            return JsonResponse({'success': False, 'error': 'Order not found'}, status=404)
+
+        # If ITN hasn't arrived yet (e.g. localhost dev) but PayFast return URL
+        # confirms COMPLETE, trust it and mark the order paid now.
+        payment_status = data.get('payment_status', '').upper()
+        if order.status != 'paid' and payment_status == 'COMPLETE':
+            order.status = 'paid'
             order.save()
+            booking = order.booking
+            booking.status = 'confirmed'
+            booking.save()
+            logger.info(
+                "Order %s marked paid via return-URL payment_status (ITN not yet received)",
+                reference,
+            )
+
+        if order.status == 'paid':
+            booking = order.booking
             return JsonResponse({
                 'success': True,
                 'data': {
-                    'authorization_url': paystack_response['data']['authorization_url'],
-                    'reference': order.reference,
-                    'booking_id': booking.id,
-                }
-            }, status=201)
-        else:
-            error_msg = paystack_response.get('message') or paystack_response.get('error') or 'Initialization failed'
-            logger.error("Paystack init error: %s", error_msg)
-            return JsonResponse({'success': False, 'error': error_msg, 'paystack_response': paystack_response}, status=response.status_code)
+                    'reference': reference,
+                    'confirmation_number': booking.confirmation_number,
+                    'booking_id': str(booking.id),
+                    'amount': float(order.amount),
+                    'email': order.email,
+                    'booking': {
+                        'name': booking.name,
+                        'type': booking.type,
+                        'check_in': booking.check_in.isoformat() if booking.check_in else None,
+                        'check_out': booking.check_out.isoformat() if booking.check_out else None,
+                        'guests': booking.guests,
+                    },
+                },
+            }, status=200)
 
-    except requests.RequestException as e:
-        logger.error(f"Paystack API error: {e}")
-        return JsonResponse({'success': False, 'error': 'Payment service error'}, status=503)
-    except Exception as e:
-        logger.error(f"Error in initialize_payment: {e}")
+        # Payment not yet confirmed
+        return JsonResponse({
+            'success': False,
+            'error': 'Payment not yet verified',
+            'status': order.status,
+        }, status=400)
+
+    except Exception as exc:
+        logger.exception("Error in verify_payment: %s", exc)
         return JsonResponse({'success': False, 'error': 'Internal server error'}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(['POST'])
+def itn_notification(request):
+    """
+    PayFast Instant Transaction Notification (ITN) handler.
+    POST /api/payments/notify/
+
+    PayFast POSTs form data here server-to-server after every transaction.
+    We validate the signature and update the order status.
+    """
+    try:
+        post_data = request.POST.dict()
+        logger.info("PayFast ITN received: %s", post_data)
+
+        passphrase = getattr(settings, 'PAYFAST_PASSPHRASE', '')
+        if not validate_payfast_itn(post_data, passphrase):
+            logger.error(
+                "PayFast ITN signature validation failed. received=%s",
+                post_data.get('signature'),
+            )
+            return HttpResponse('Invalid signature', status=400)
+
+        m_payment_id = post_data.get('m_payment_id')
+        payment_status = post_data.get('payment_status', '').upper()
+
+        if not m_payment_id:
+            logger.warning("ITN missing m_payment_id")
+            return HttpResponse('Missing m_payment_id', status=400)
+
+        order = Order.objects.filter(reference=m_payment_id).first()
+        if not order:
+            logger.warning("ITN: order not found for reference=%s", m_payment_id)
+            return HttpResponse('Order not found', status=404)
+
+        if payment_status == 'COMPLETE':
+            order.status = 'paid'
+            order.save()
+            booking = order.booking
+            booking.status = 'confirmed'
+            booking.save()
+            logger.info(
+                "PayFast payment complete: order=%s booking=%s",
+                m_payment_id, booking.id,
+            )
+        elif payment_status in ('FAILED', 'CANCELLED'):
+            order.status = 'failed'
+            order.save()
+            logger.warning("PayFast payment %s: order=%s", payment_status, m_payment_id)
+        else:
+            logger.info("PayFast ITN status=%s order=%s (no action)", payment_status, m_payment_id)
+
+        return HttpResponse('OK', status=200)
+
+    except Exception as exc:
+        logger.exception("Error in itn_notification: %s", exc)
+        return HttpResponse('Internal server error', status=500)
+
+
+# ---------------------------------------------------------------------------
+# Order list (staff)
+# ---------------------------------------------------------------------------
+
+class OrderListView(APIView):
+    """List orders — staff only. GET /api/payfast/orders/"""
+
+    def get(self, request):
+        try:
+            orders = Order.objects.all()
+            status_filter = request.query_params.get('status')
+            if status_filter:
+                orders = orders.filter(status=status_filter)
+            booking_id = request.query_params.get('booking_id')
+            if booking_id:
+                orders = orders.filter(booking_id=booking_id)
+            serializer = OrderSerializer(orders, many=True)
+            return Response({'count': orders.count(), 'data': serializer.data}, status=status.HTTP_200_OK)
+        except Exception as exc:
+            logger.exception("Error in OrderListView: %s", exc)
+            return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

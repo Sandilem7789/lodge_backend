@@ -185,9 +185,6 @@ class SettingsView(APIView):
     
     def get(self, request):
         try:
-            # Get Paystack public key from settings
-            paystack_public_key = getattr(settings, 'PAYSTACK_PUBLIC_KEY', '')
-            
             # Lodge contact info (can be moved to settings or database later)
             lodge_info = {
                 'name': 'Ikhaya Lami Lodge',
@@ -195,14 +192,15 @@ class SettingsView(APIView):
                 'phone': '+27 12 345 6789',  # Update with actual phone
                 'address': 'Lodge Address, City, Province, South Africa',  # Update with actual address
             }
-            
+
             return Response({
                 'success': True,
                 'data': {
                     'lodge': lodge_info,
-                    'paystack': {
-                        'public_key': paystack_public_key,
-                        'currency': getattr(settings, 'PAYSTACK_CURRENCY', 'ZAR'),
+                    'payfast': {
+                        'merchant_id': getattr(settings, 'PAYFAST_MERCHANT_ID', ''),
+                        'currency': 'ZAR',
+                        'sandbox': getattr(settings, 'PAYFAST_SANDBOX', True),
                     }
                 }
             }, status=status.HTTP_200_OK)

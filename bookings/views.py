@@ -57,7 +57,7 @@ class BookingCreateView(APIView):
                 booking=booking,
                 defaults={
                     'amount': amount,
-                    'currency': settings.PAYSTACK_CURRENCY,
+                    'currency': 'ZAR',
                     'email': booking.email,
                     'status': 'pending'
                 }
@@ -341,7 +341,7 @@ class BookingListCreateView(APIView):
                 booking=booking,
                 defaults={
                     'amount': amount,
-                    'currency': settings.PAYSTACK_CURRENCY,
+                    'currency': 'ZAR',
                     'email': booking.email,
                     'status': 'pending'
                 }
