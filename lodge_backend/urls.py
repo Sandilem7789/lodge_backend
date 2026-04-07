@@ -17,7 +17,7 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from bookings.views import StaffDashboardView, AvailabilityCalendarView, SafariAvailabilityView
-from paystack import views as paystack_views
+from paystack import views as payfast_views
 from lodge_backend.dashboard_views import PricesView, ReportsView, SettingsView
 
 urlpatterns = [
@@ -31,10 +31,11 @@ urlpatterns = [
     path('api/bookings/', include('bookings.urls')),
     path('api/contact/', include('contact.urls')),
     path('api/newsletter/', include('newsletter.urls')),
-    path('api/paystack/', include('paystack.urls')),
-    # Compatibility routes for frontend expecting /api/payments/ endpoints
-    path('api/payments/initialize/', paystack_views.initialize_payment, name='initialize_payment'),
-    path('api/payments/verify/', paystack_views.verify_payment, name='verify_payment'),
+    # PayFast payment endpoints
+    path('api/payments/initialize/', payfast_views.initialize_payment, name='initialize_payment'),
+    path('api/payments/verify/', payfast_views.verify_payment, name='verify_payment'),
+    path('api/payments/notify/', payfast_views.itn_notification, name='itn_notification'),
+    path('api/payfast/', include('paystack.urls')),
     # Dashboard endpoints
     path('api/prices/', PricesView.as_view(), name='prices'),
     path('api/reports/', ReportsView.as_view(), name='reports'),

@@ -140,10 +140,14 @@ if not DEBUG:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
 
-# Paystack Payment Integration
-PAYSTACK_SECRET_KEY = config('PAYSTACK_SECRET_KEY', default='')
-PAYSTACK_PUBLIC_KEY = config('PAYSTACK_PUBLIC_KEY', default='')
-PAYSTACK_CURRENCY = config('PAYSTACK_CURRENCY', default='ZAR')
+# PayFast Payment Integration
+PAYFAST_MERCHANT_ID = config('PAYFAST_MERCHANT_ID', default='10042860')
+PAYFAST_MERCHANT_KEY = config('PAYFAST_MERCHANT_KEY', default='bixilvur2t4k3')
+PAYFAST_PASSPHRASE = config('PAYFAST_PASSPHRASE', default='octobermesh2025')
+# Set to False in production to use the live PayFast URL
+PAYFAST_SANDBOX = config('PAYFAST_SANDBOX', default=True, cast=bool)
+# Frontend URL used to build return/cancel URLs when Origin header is absent
+FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')
 
 # Logging configuration for payment debugging
 LOGGING = {
@@ -169,9 +173,9 @@ LOGGING = {
             'filename': BASE_DIR / 'logs' / 'django.log',
             'formatter': 'verbose',
         },
-        'paystack_file': {
+        'payfast_file': {
             'class': 'logging.FileHandler',
-            'filename': BASE_DIR / 'logs' / 'paystack.log',
+            'filename': BASE_DIR / 'logs' / 'payfast.log',
             'formatter': 'verbose',
         },
     },
@@ -180,8 +184,8 @@ LOGGING = {
         'level': 'INFO',
     },
     'loggers': {
-        'paystack': {
-            'handlers': ['console', 'paystack_file'],
+        'payfast': {
+            'handlers': ['console', 'payfast_file'],
             'level': 'DEBUG',
             'propagate': False,
         },
